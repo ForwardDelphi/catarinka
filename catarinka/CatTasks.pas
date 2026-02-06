@@ -2,7 +2,7 @@ unit CatTasks;
 {
   Catarinka - Task Management library
 
-  Copyright (c) 2003-2020 Felipe Daragon
+  Copyright (c) 2003-2025 Felipe Daragon
   License: 3-clause BSD
   See https://github.com/felipedaragon/catarinka/ for details
 
@@ -20,9 +20,12 @@ uses
 {$ENDIF}
 function GetProcessWorkingSetSize:int64;
 function KillTask(const ExeFileName: string;FullName:boolean=false): Integer;
+function KillOtherTasks(const ExeFileName: string; FullName: boolean = false): Integer;
 function KillChildTasks: boolean;
 function MatchProcessFilename(pe:TProcessEntry32; const ExeFileName: string; FullName:boolean=false):boolean;
 function RunTask(const ExeFileName: string; const Wait: boolean = false;
+  const WindowState: Integer = SW_SHOW): Cardinal;
+function RunTaskWaitMax(const ExeFileName: string; const MaxMinutes: Integer;
   const WindowState: Integer = SW_SHOW): Cardinal;
 function TaskRunning(const ExeFileName: WideString;const FullName:boolean): boolean;
 function TaskRunningCount(const ExeFileName: WideString;const FullName:boolean): integer;
@@ -36,6 +39,8 @@ procedure KillTaskList(ProcList: TStringList);
 procedure ResumeProcess(const ProcessID: DWORD);
 procedure SuspendProcess(const ProcessID: DWORD);
 function IsUserAnAdmin(): BOOL; external 'shell32.dll';
+procedure RunProcessAsUser(const TargetPID:Cardinal;const CommandLine:string);
+procedure RunProcessRestricted(const CommandLine:string);
 
 implementation
 
@@ -43,8 +48,21 @@ uses CatStrings, CatMatch;
 
 const
   THREAD_SUSPEND_RESUME = $00000002;
+  DISABLE_MAX_PRIVILEGE = $1;
   cProcSep = '|pid=';
 
+
+function CreateRestrictedToken(
+  ExistingTokenHandle: THandle;
+  Flags: DWORD;
+  DisableSidCount: DWORD;
+  SidsToDisable: PSidAndAttributes;
+  DeletePrivilegeCount: DWORD;
+  PrivilegesToDelete: PTokenPrivileges;
+  RestrictedSidCount: DWORD;
+  SidsToRestrict: PSidAndAttributes;
+  out NewTokenHandle: THandle
+): BOOL; stdcall; external 'advapi32.dll' name 'CreateRestrictedToken';
 
 function OpenThread(dwDesiredAccess: DWORD; bInheritHandle: BOOL;
   dwThreadId: DWORD): DWORD; stdcall; external 'kernel32.dll';
@@ -178,7 +196,7 @@ begin
     CloseHandle(h);
 end;
 
-// Runs a coomand and optionally waits for the execution to end
+// Runs a comand and optionally waits for the execution to end
 function RunTask(const ExeFileName: string; const Wait: boolean = false;
   const WindowState: Integer = SW_SHOW): Cardinal;
 var
@@ -212,6 +230,53 @@ begin
   else
     Result := $FFFFFFFF; // -1
 end;
+
+// Runs a comand and waits for a specific number of minutes.
+// If MaxMinutes is exceeded, the function stops waiting while the process
+// continues running in the background
+// Returns -1 if failed, returns -2 if timeout was reached, otherwise returns
+// the process ID
+function RunTaskWaitMax(const ExeFileName: string; const MaxMinutes: Integer;
+  const WindowState: Integer = SW_SHOW): Cardinal;
+var
+  Prog: array [0 .. 512] of char;
+  CurDir: array [0 .. 255] of char;
+  WorkDir: string;
+  StartupInfo: TStartupInfo;
+  ProcessInfo: TProcessInformation;
+  ExitCode: Cardinal;
+  StartTime, ElapsedTime: Cardinal;
+begin
+  StrPCopy(Prog, ExeFileName);
+  GetDir(0, WorkDir);
+  StrPCopy(CurDir, WorkDir);
+  FillChar(StartupInfo, sizeof(StartupInfo), #0);
+  StartupInfo.cb := sizeof(StartupInfo);
+  StartupInfo.dwFlags := STARTF_USESHOWWINDOW;
+  StartupInfo.wShowWindow := WindowState;
+
+  if CreateProcess(nil, Prog, nil, nil, false, CREATE_NEW_CONSOLE or
+    NORMAL_PRIORITY_CLASS, nil, nil, StartupInfo, ProcessInfo) then
+  begin
+    Result := ProcessInfo.dwProcessId;
+
+    StartTime := GetTickCount; // Get the starting time
+    repeat
+      application.ProcessMessages;
+      GetExitCodeProcess(ProcessInfo.hProcess, ExitCode);
+      WaitForSingleObject(ProcessInfo.hProcess, 10);
+      ElapsedTime := (GetTickCount - StartTime) div 60000; // Convert to minutes
+    until (ExitCode <> STILL_ACTIVE) or (ElapsedTime >= MaxMinutes) or application.Terminated;
+
+    // If the time limit is reached but the process is still running, return -2
+    if (ExitCode = STILL_ACTIVE) and (ElapsedTime >= MaxMinutes) then
+      Result := $FFFFFFFE; // -2 means time limit reached but process still running
+  end
+  else
+    Result := $FFFFFFFF; // -1 means process failed to start
+end;
+
+
 
 // Returns the number of running tasks
 function TaskRunningCount(const ExeFileName: WideString;const FullName:boolean): integer;
@@ -290,6 +355,47 @@ begin
   end;
   CloseHandle(FSnapshotHandle);
 end;
+
+// Kills a process by its executable filename, with exception of itself
+// Checks the process ID to make sure it is not terminating itself
+function KillOtherTasks(const ExeFileName: string; FullName: boolean = false): Integer;
+const
+  PROCESS_TERMINATE = $0001;
+var
+  ContinueLoop: BOOL;
+  FSnapshotHandle: THandle;
+  FProcessEntry32: TProcessEntry32;
+  CurrentProcessID: DWORD;
+  ProcessHandle: THandle;
+begin
+  Result := 0;
+  CurrentProcessID := GetCurrentProcessId(); // Get the ID of the current process
+
+  FSnapshotHandle := CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+  if FSnapshotHandle = INVALID_HANDLE_VALUE then
+    Exit;
+
+  FProcessEntry32.dwSize := SizeOf(FProcessEntry32);
+  ContinueLoop := Process32First(FSnapshotHandle, FProcessEntry32);
+
+  while ContinueLoop do
+  begin
+    // Check if the process has the same executable name but is NOT the current process
+    if (FProcessEntry32.th32ProcessID <> CurrentProcessID) and
+       MatchProcessFilename(FProcessEntry32, ExeFileName, FullName) then
+    begin
+      ProcessHandle := OpenProcess(PROCESS_TERMINATE, False, FProcessEntry32.th32ProcessID);
+      if ProcessHandle <> 0 then
+      begin
+        Result := Integer(TerminateProcess(ProcessHandle, 0));
+        CloseHandle(ProcessHandle);
+      end;
+    end;
+    ContinueLoop := Process32Next(FSnapshotHandle, FProcessEntry32);
+  end;
+  CloseHandle(FSnapshotHandle);
+end;
+
 
 // Kills a task or multiple tasks by a wildcard filename, such as notep*.exe
 procedure KillTaskByMask(FileMask:string);
@@ -388,6 +494,49 @@ begin
   else
     result := -1;
   FreeMem(pmc);
+end;
+
+procedure RunProcessRestricted(const CommandLine:string);
+var
+  hToken, hRestrictedToken: THandle;
+  si: TStartupInfo;
+  pi: TProcessInformation;
+begin
+  // Open the current process token
+  OpenProcessToken(GetCurrentProcess, TOKEN_DUPLICATE or TOKEN_ADJUST_DEFAULT or TOKEN_QUERY or TOKEN_ASSIGN_PRIMARY, hToken);
+
+  // Create a restricted version of the token
+  CreateRestrictedToken(hToken, DISABLE_MAX_PRIVILEGE, 0, nil, 0, nil, 0, nil, hRestrictedToken);
+
+  // Prepare to start the new process
+  ZeroMemory(@si, SizeOf(si));
+  si.cb := SizeOf(si);
+  ZeroMemory(@pi, SizeOf(pi));
+
+  // Create the new process with the restricted token
+  CreateProcessAsUser(hRestrictedToken, nil, PChar(CommandLine), nil, nil, False, 0, nil, nil, si, pi);
+end;
+
+procedure RunProcessAsUser(const TargetPID:Cardinal;const CommandLine:string);
+var
+  hProcess: THandle;
+  hToken, hDupToken: THandle;
+  si: TStartupInfo;
+  pi: TProcessInformation;
+begin
+  // Open the target process, get its token, duplicate the token
+  hProcess := OpenProcess(PROCESS_QUERY_INFORMATION, False, TargetPID);
+  OpenProcessToken(hProcess, TOKEN_DUPLICATE, hToken);
+  DuplicateTokenEx(hToken, MAXIMUM_ALLOWED, nil, SecurityImpersonation, TokenPrimary, hDupToken);
+
+  // Prepare to start the new process
+  ZeroMemory(@si, SizeOf(si));
+  si.cb := SizeOf(si);
+  ZeroMemory(@pi, SizeOf(pi));
+
+  // Create the new process
+  CreateProcessAsUser(hDupToken, nil, PChar(CommandLine), nil, nil, False, 0, nil, nil, si, pi);
+
 end;
 
 // ------------------------------------------------------------------------//

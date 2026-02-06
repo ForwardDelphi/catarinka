@@ -2,10 +2,17 @@ unit CatJSON;
 
 {
   Catarinka TCatJSON - JSON Manipulation Object
-  Copyright (c) 2010-2023 Felipe Daragon
+  Copyright (c) 2010-2025 Felipe Daragon
   License: 3-clause BSD
   See https://github.com/felipedaragon/catarinka/ for details
 
+  06.09.2025:
+  - Added PrettyPrintJson function
+  15.02.2025:
+  - Added methods RawGetValueStr, RawGetValueInt and RawGetValueBool. These
+    methods use the iterator to access the desired key, which is useful fo
+    keys containing dot in the name. Also added TreatMissingAsFalse property,
+    useful for operations when the omission of key must be treated as a false
   31.08.2023:
   - Added GetValueDataType method
   05.06.2023:
@@ -61,6 +68,7 @@ type
   private
     fUseUnicode: boolean;
     fDefaultValue: Variant;
+    fTreatMissingAsFalse: boolean;
     fObject: ISuperObject;
     function GetCount:integer;
     function GetText: string;
@@ -74,6 +82,9 @@ type
     function GetValueDataType(const Name:string):TSuperType;
     function HasPath(const Name: string): Boolean;
     function IncValue(const Name: string; Int: int64 = 1) : Int64;
+    function RawGetValueStr(const Name: string; DefaultValue: string): string;
+    function RawGetValueBool(const Name: string; DefaultValue: boolean): boolean;
+    function RawGetValueInt(const Name: string; DefaultValue: Int64): Int64;
     procedure RemovePath(const Name: string);
     procedure LoadFromFile(const Filename: string);
     procedure SaveToFile(const Filename: string);
@@ -91,6 +102,7 @@ type
     property sObject: ISuperObject read fObject;
     property Text: string read GetText write SetText;
     property TextUnquoted:string read GetTextUnquoted; // JSON with UnquotedKeys
+    property TreatMissingAsFalse:boolean read fTreatMissingAsFalse write fTreatMissingAsFalse;
     property Values[const Name: string]: Variant read GetValue_ write SetValue; default;
   end;
   
@@ -140,6 +152,7 @@ type
     TSuperObjectIter = IMember;
 {$ENDIF}
 
+function PrettyPrintJson(const Json: string; Indent: Integer = 2): string;
 function GetJSONVal(const JSON, Name: string;const DefaultValue: Variant): Variant;
 function IsValidJSONName(const S: string): Boolean;
 function JSONStringUnescape(const s:string):string;
@@ -147,6 +160,73 @@ function JSONStringUnescape(const s:string):string;
 implementation
 
 uses CatFiles, CatStrings;
+
+function PrettyPrintJson(const Json: string; Indent: Integer = 2): string;
+var
+  I, Level: Integer;
+  InString: Boolean;
+  C: Char;
+  SB: TStringBuilder;
+begin
+  SB := TStringBuilder.Create;
+  try
+    Level := 0;
+    InString := False;
+    for I := 1 to Length(Json) do
+    begin
+      C := Json[I];
+      case C of
+        '"':
+          begin
+            SB.Append(C);
+            if (I = 1) or (Json[I-1] <> '\') then
+              InString := not InString;
+          end;
+        '{','[':
+          begin
+            SB.Append(C);
+            if not InString then
+            begin
+              Inc(Level);
+              SB.AppendLine;
+              SB.Append(StringOfChar(' ', Level * Indent));
+            end;
+          end;
+        '}',']':
+          begin
+            if not InString then
+            begin
+              Dec(Level);
+              SB.AppendLine;
+              SB.Append(StringOfChar(' ', Level * Indent));
+              SB.Append(C);
+            end
+            else
+              SB.Append(C);
+          end;
+        ',':
+          begin
+            SB.Append(C);
+            if not InString then
+            begin
+              SB.AppendLine;
+              SB.Append(StringOfChar(' ', Level * Indent));
+            end;
+          end;
+        ':':
+          begin
+            SB.Append(C);
+            if not InString then SB.Append(' ');
+          end;
+      else
+        SB.Append(C);
+      end;
+    end;
+    Result := SB.ToString;
+  finally
+    SB.Free;
+  end;
+end;
 
 function JSONStringUnescape(const s:string):string;
 var
@@ -268,9 +348,15 @@ procedure TCatJSON.SetText(const Text: string);
 var
   JSON: string;
 begin
-  JSON := Text;
+  JSON := trim(Text);
   if JSON = emptystr then
     JSON := EmptyJSONStr;
+  if beginswith(json,'{') = false then
+    JSON := EmptyJSONStr;
+  if endswith(json,'}') = false then
+    JSON := EmptyJSONStr;
+
+
   fObject := nil;
 {$IFDEF USEXSUPEROBJECT}
   fObject := TSuperObject.Create(JSON, False);
@@ -286,6 +372,7 @@ end;
 
 constructor TCatJSON.Create(const JSON: string = '');
 begin
+  fTreatMissingAsFalse := false;
 {$IFDEF UNICODE}
   fUseUnicode := true;
 {$ELSE}
@@ -407,6 +494,75 @@ begin
     end;
     {$ENDIF}
   end;
+end;
+
+function TCatJSON.RawGetValueStr(const Name: string;
+  DefaultValue: string): string;
+var
+  {$IFNDEF USEXSUPEROBJECT}
+  ite: TSuperObjectIter;
+{$ENDIF}
+begin
+  Result := DefaultValue;
+{$IFDEF USEXSUPEROBJECT}
+ // ToDo
+{$ELSE}
+  if ObjectFindFirst(fObject, ite) then
+    repeat
+      if ite.key = Name then begin
+        Result := ite.val.AsString;
+        break;
+      end;
+    until not ObjectFindNext(ite);
+  ObjectFindClose(ite);
+{$ENDIF}
+end;
+
+function TCatJSON.RawGetValueBool(const Name: string;
+  DefaultValue: boolean): boolean;
+var
+  {$IFNDEF USEXSUPEROBJECT}
+  ite: TSuperObjectIter;
+{$ENDIF}
+begin
+  Result := DefaultValue;
+  if (fTreatMissingAsFalse = true) and (DefaultValue = true) then
+    Result := false;
+
+{$IFDEF USEXSUPEROBJECT}
+ // ToDo
+{$ELSE}
+  if ObjectFindFirst(fObject, ite) then
+    repeat
+      if ite.key = Name then begin
+        Result := ite.val.AsBoolean;
+        break;
+      end;
+    until not ObjectFindNext(ite);
+  ObjectFindClose(ite);
+{$ENDIF}
+end;
+
+function TCatJSON.RawGetValueInt(const Name: string;
+  DefaultValue: int64): int64;
+var
+  {$IFNDEF USEXSUPEROBJECT}
+  ite: TSuperObjectIter;
+{$ENDIF}
+begin
+  Result := DefaultValue;
+{$IFDEF USEXSUPEROBJECT}
+ // ToDo
+{$ELSE}
+  if ObjectFindFirst(fObject, ite) then
+    repeat
+      if ite.key = Name then begin
+        Result := ite.val.AsInteger;
+        break;
+      end;
+    until not ObjectFindNext(ite);
+  ObjectFindClose(ite);
+{$ENDIF}
 end;
 
 function TCatJSON.GetValueDataType(const Name:string):TSuperType;

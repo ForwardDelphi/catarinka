@@ -90,6 +90,7 @@ function url_combine(L: plua_State): integer; cdecl;
 function url_getport(L: plua_State): integer; cdecl;
 function url_gettiny(L: plua_State): integer; cdecl;
 function url_changepath(L: plua_State): integer; cdecl;
+function url_open(L: plua_State): integer; cdecl;
 
 function conv_inttohex(L: plua_State): integer; cdecl;
 function conv_hextoint(L: plua_State): integer; cdecl;
@@ -108,6 +109,7 @@ function console_printred(L: plua_State): integer; cdecl;
 function console_printwhite(L: plua_State): integer; cdecl;
 function console_readline(L: plua_State): integer; cdecl;
 function console_readpassword(L: plua_State): integer; cdecl;
+function console_printdisablecolors(L: plua_State): integer; cdecl;
 
 function html_escape(L: plua_State): integer; cdecl;
 function html_unescape(L: plua_State): integer; cdecl;
@@ -141,8 +143,8 @@ implementation
 
 uses
   ExtPascalUtils, synacode, pLua, pLuaTable,
-  CtkStrList, CtkStrListParser, CtkHTMLParser, CtkJSON, CtkTarman,
-  CatStrings, CatJSON, CatMatch, CatFiles, CatHTTP, CatUtils,
+  CtkStrList, CtkStrListParser, CtkHTMLParser, CtkJSON, CtkTarman, CatHTML,
+  CatStrings, CatJSON, CatMatch, CatFiles, CatUtils, CatHTTP,
   CatInet, CatTasks, CatCLUtils, CatCSUtils, CatHashes;
 
 function int_securerandom(L: plua_State): integer; cdecl;
@@ -166,6 +168,14 @@ function console_readpassword(L: plua_State): integer; cdecl;
 begin
   lua_pushstring(L, cs.readpassword);
   result := 1;
+end;
+
+function console_printdisablecolors(L: plua_State): integer; cdecl;
+begin
+  if plua_validateargsets(L, result, [[LUA_TBOOLEAN]]).OK then begin
+    cs.LuaState := L;
+    cs.EnableColors := not lua_toboolean(L, 1);
+  end;
 end;
 
 function console_printgreen(L: plua_State): integer; cdecl;
@@ -368,13 +378,13 @@ end;
 function html_escape(L: plua_State): integer; cdecl;
 begin
   if plua_validateargs(L, result, [LUA_TSTRING]).OK then
-    lua_pushstring(L, CatHTTP.htmlescape(lua_tostring(L, 1)));
+    lua_pushstring(L, CatHTML.htmlescape(lua_tostring(L, 1)));
 end;
 
 function html_unescape(L: plua_State): integer; cdecl;
 begin
   if plua_validateargs(L, result, [LUA_TSTRING]).OK then
-    lua_pushstring(L, CatHTTP.htmlunescape(lua_tostring(L, 1)));
+    lua_pushstring(L, CatHTML.htmlunescape(lua_tostring(L, 1)));
 end;
 
 function html_striptags(L: plua_State): integer; cdecl;
@@ -386,7 +396,7 @@ end;
 function json_escape(L: plua_State): integer; cdecl;
 begin
   if plua_validateargs(L, result, [LUA_TSTRING]).OK then
-    lua_pushstring(L, CatHTTP.jsonstringescape(lua_tostring(L, 1)));
+    lua_pushstring(L, CatHTML.jsonstringescape(lua_tostring(L, 1)));
 end;
 
 function str_stripquotes(L: plua_State): integer; cdecl;
@@ -891,6 +901,12 @@ function url_changepath(L: plua_State): integer; cdecl;
 begin
   if plua_validateargs(L, result, [LUA_TSTRING, LUA_TSTRING]).OK then
     lua_pushstring(L, ChangeUrlPath(lua_tostring(L, 1), lua_tostring(L, 2)));
+end;
+
+function url_open(L: plua_State): integer; cdecl;
+begin
+  if plua_validateargs(L, result, [LUA_TSTRING]).OK then
+    ShellExecute(0, 'open', PChar(lua_tostring(L, 1)), nil, nil, SW_SHOWNORMAL);
 end;
 
 function task_isrunning(L: plua_State): integer; cdecl;

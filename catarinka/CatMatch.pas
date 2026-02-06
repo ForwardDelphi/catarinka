@@ -2,7 +2,7 @@ unit CatMatch;
 {
   Catarinka - Regular Expression and various other useful matching functions
 
-  Copyright (c) 2003-2021 Felipe Daragon
+  Copyright (c) 2003-2025 Felipe Daragon
   License: 3-clause BSD
   See https://github.com/felipedaragon/catarinka/ for details
 
@@ -51,6 +51,10 @@ type
 function RegExpFind(const s, re: string): string;
 function RegExpReplace(const s, re, sreplacement: string): string; overload;
 function RegExpReplace(const s, re: string; refunc: TRegExprReplaceFunction): string; overload;
+
+function AnyEmptyStr(const Values: array of string): Boolean;
+function AnyTrue(const Values: array of Boolean): Boolean;
+function AnyFalse(const Values: array of Boolean): Boolean;
 function CatCaseWildOf(const s: string; labels: array of string;
   const casesensitive: Boolean = true): integer;
 function CatCaseWildXOf(const s: string; labels: array of string;
@@ -81,6 +85,54 @@ function MatchWildcardXL(s, Mask: string; sarr:array of string;
 implementation
 
 uses CatStrings, CatStringLoop;
+
+// Takes an array of string values and returns True if any one of them is empty
+function AnyEmptyStr(const Values: array of string): Boolean;
+var
+  i: Integer;
+begin
+  Result := False; // Default to False
+  for i := Low(Values) to High(Values) do
+  begin
+    if Values[i] = emptystr then
+    begin
+      Result := True;
+      Exit; // Exit early if a True value is found
+    end;
+  end;
+end;
+
+// Takes an array of boolean values and returns True if any one of them is True
+function AnyTrue(const Values: array of Boolean): Boolean;
+var
+  i: Integer;
+begin
+  Result := False; // Default to False
+  for i := Low(Values) to High(Values) do
+  begin
+    if Values[i] = True then
+    begin
+      Result := True;
+      Exit; // Exit early if a True value is found
+    end;
+  end;
+end;
+
+// Takes an array of boolean values and returns True if any one of them is False
+function AnyFalse(const Values: array of Boolean): Boolean;
+var
+  i: Integer;
+begin
+  Result := False; // Default to False
+  for i := Low(Values) to High(Values) do
+  begin
+    if Values[i] = False then
+    begin
+      Result := True;
+      Exit; // Exit early if a True value is found
+    end;
+  end;
+end;
 
 { 
   Case Statement with wildcard matching

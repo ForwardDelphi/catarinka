@@ -2,7 +2,7 @@ unit CatFiles;
 {
   Catarinka - File System functions
 
-  Copyright (c) 2003-2021 Felipe Daragon
+  Copyright (c) 2003-2025 Felipe Daragon
   License: 3-clause BSD
   See https://github.com/felipedaragon/catarinka/ for details
 
@@ -32,6 +32,7 @@ function FilenameToMimeType(const filename: string): string;
 function FindDiskDriveByVolumeName(const AVolumeName: String;
   IncludeRemovables:boolean=true): String;
 function ForceDir(const dir: string): boolean;
+function GetAbsoluteDir(const BaseDir, Reference: string; IgnoreFirstTraversal: Boolean = False): string;
 function GetDirAge(const Dir: string): TDateTime;
 function GetDiskSerialNumber(const drive: string): string;
 function GetVolumeName(const ADriveLetter: Char): string;
@@ -55,6 +56,8 @@ procedure CopyAfterFirstLine(const sourcefile, targetfile: string;
   appendln: boolean = false; lnstr: string = '');
 procedure GetDirs(const dir: string; const Result: TStrings;
   SortResult: boolean = true);
+procedure GetDirsByCreationTime(const dir: string; const Result: TStrings;
+  Ascending: Boolean = True);
 function GetDirectorySize(const APath: string): Int64;
 procedure GetFiles(const dir: string; const Result: TStrings;
   const IncludeDir: boolean = false; const IncludeExt: boolean = true);
@@ -63,10 +66,180 @@ procedure WipeFile(const filename: string);
 function GetFreeSpaceOnDrive(const Drive: string): Int64;
 procedure GetDiskDrives(var ADriveList: TStrings; IncludeRemovables:boolean=true);
 
+// File operations involving date/time
+procedure GetFilesRecursiveByCreationTime(const Result: TStrings;
+  Dir, Mask: string; Ascending: Boolean = True);
+procedure GetFilesByCreationTimeAsc(const dir: string; const Result: TStrings;
+  const IncludeDir: Boolean = False; const IncludeExt: Boolean = True);
+procedure GetFilesByCreationTimeDesc(const dir: string; const Result: TStrings;
+  const IncludeDir: Boolean = False; const IncludeExt: Boolean = True);
+function SortFoldersByCreationDate(const BasePath, FolderNames: string): string;
+function GetFileDateTimes(const FileName: string;
+  out Created, Modified: TDateTime): Boolean;
+procedure ApplyFileDateTimes(const FileName: string;
+  const Created, Modified: TDateTime);
+
+
 implementation
 
 uses
   CatStrings;
+
+function GetFileDateTimes(const FileName: string;
+  out Created, Modified: TDateTime): Boolean;
+var
+  h: THandle;
+  ftCreate, ftAccess, ftWrite: TFileTime;
+  st: TSystemTime;
+begin
+  Result := False;
+  Created := 0;
+  Modified := 0;
+
+  h := CreateFile(PChar(FileName),
+                  GENERIC_READ,
+                  FILE_SHARE_READ or FILE_SHARE_WRITE or FILE_SHARE_DELETE,
+                  nil,
+                  OPEN_EXISTING,
+                  FILE_ATTRIBUTE_NORMAL,
+                  0);
+  if h = INVALID_HANDLE_VALUE then
+    Exit;
+  try
+    if GetFileTime(h, @ftCreate, @ftAccess, @ftWrite) then
+    begin
+      if FileTimeToSystemTime(ftCreate, st) then
+        Created := SystemTimeToDateTime(st);
+      if FileTimeToSystemTime(ftWrite, st) then
+        Modified := SystemTimeToDateTime(st);
+      Result := True;
+    end;
+  finally
+    CloseHandle(h);
+  end;
+end;
+
+procedure ApplyFileDateTimes(const FileName: string;
+  const Created, Modified: TDateTime);
+var
+  h: THandle;
+  st: TSystemTime;
+  ftLocal, ftUtcCreate, ftUtcWrite: TFileTime;
+begin
+  if (Created = 0) and (Modified = 0) then
+    Exit;
+
+  h := CreateFile(PChar(FileName),
+                  GENERIC_WRITE,
+                  FILE_SHARE_READ or FILE_SHARE_WRITE or FILE_SHARE_DELETE,
+                  nil,
+                  OPEN_EXISTING,
+                  FILE_ATTRIBUTE_NORMAL,
+                  0);
+  if h = INVALID_HANDLE_VALUE then
+    Exit;
+  try
+    // Creation time
+    if Created <> 0 then
+    begin
+      DateTimeToSystemTime(Created, st);
+      SystemTimeToFileTime(st, ftLocal);
+      LocalFileTimeToFileTime(ftLocal, ftUtcCreate);
+    end
+    else
+      ZeroMemory(@ftUtcCreate, SizeOf(ftUtcCreate));
+
+    // Modified time
+    if Modified <> 0 then
+    begin
+      DateTimeToSystemTime(Modified, st);
+      SystemTimeToFileTime(st, ftLocal);
+      LocalFileTimeToFileTime(ftLocal, ftUtcWrite);
+    end
+    else
+      ZeroMemory(@ftUtcWrite, SizeOf(ftUtcWrite));
+
+    // Access time left unchanged (nil)
+SetFileTime(h,
+  PFileTime(Ord(Created <> 0) * NativeInt(@ftUtcCreate)),
+  nil,
+  PFileTime(Ord(Modified <> 0) * NativeInt(@ftUtcWrite))
+);
+  finally
+    CloseHandle(h);
+  end;
+end;
+
+function GetAbsoluteDir(const BaseDir, Reference: string; IgnoreFirstTraversal: Boolean = False): string;
+  function NormalizeRef(const S: string): string;
+  begin
+    Result := S.Replace('/', PathDelim).Replace('\', PathDelim);
+    // Strip redundant leading path delimiters (so "/../" works relative to BaseDir)
+    while (Length(Result) > 0) and (Result[1] = PathDelim) do
+      Delete(Result, 1, 1);
+  end;
+
+  function JoinParts(const Parts: TArray<string>): string;
+  var
+    I: Integer;
+  begin
+    Result := '';
+    for I := 0 to High(Parts) do
+    begin
+      if Result = '' then
+        Result := Parts[I]
+      else
+        Result := TPath.Combine(Result, Parts[I]);
+    end;
+  end;
+
+var
+  BaseAbs, RefNorm, Combined, RelPath: string;
+  Parts, NewParts: TArray<string>;
+  I: Integer;
+  SkipFirst: Boolean;
+begin
+  BaseAbs := ExpandFileName(TPath.GetFullPath(BaseDir));
+  RefNorm := NormalizeRef(Reference);
+
+  if TPath.IsPathRooted(RefNorm) then
+    Exit(ExpandFileName(TPath.GetFullPath(RefNorm)));
+
+  Parts := RefNorm.Split([PathDelim], TStringSplitOptions.ExcludeEmpty);
+  SetLength(NewParts, 0);
+
+  SkipFirst := IgnoreFirstTraversal;
+
+  for I := 0 to High(Parts) do
+  begin
+    if Parts[I] = '..' then
+    begin
+      if SkipFirst then
+      begin
+        SkipFirst := False; // only ignore one
+        Continue;
+      end;
+      if Length(NewParts) > 0 then
+        SetLength(NewParts, Length(NewParts)-1);
+    end
+    else if Parts[I] <> '.' then
+    begin
+      NewParts := NewParts + [Parts[I]];
+    end;
+  end;
+
+  RelPath := JoinParts(NewParts);
+
+  if RelPath <> '' then
+    Combined := TPath.Combine(BaseAbs, RelPath)
+  else
+    Combined := BaseAbs;
+
+  Result := ExpandFileName(TPath.GetFullPath(Combined));
+
+  if (Result <> TPath.GetPathRoot(Result)) then
+    Result := ExcludeTrailingPathDelimiter(Result);
+end;
 
 function GetFreeSpaceOnDrive(const Drive: string): Int64;
 var
@@ -382,7 +555,7 @@ begin
     try
       Result := f.nFileSizeHigh shl 32 + f.nFileSizeLow;
     finally
-{$IF CompilerVersion > 22}Winapi.{$IFEND}Windows.FindClose(h);
+{$IF CompilerVersion > 22}Winapi.{$ENDIF}Windows.FindClose(h);
     end;
   except
   end;
@@ -394,16 +567,16 @@ var
   f: TFileStream;
 begin
   SL := TStringList.Create;
-  f := TFileStream.Create(filename, fmOpenRead or fmShareDenyWrite);
-  with f do
-  begin
+  try
+    f := TFileStream.Create(filename, fmOpenRead or fmShareDenyNone);
     try
       SL.LoadFromStream(f);
       Result := SL.Text;
-    except
-      Result := emptystr;
+    finally
+      f.Free;
     end;
-    Free;
+  except
+    Result := '';
   end;
   SL.Free;
 end;
@@ -816,6 +989,525 @@ begin
     dl.Free;
   end;
 
+end;
+
+{ **************************************************************************** }
+
+type
+  TDirInfo = record
+    Name: string;
+    CreationTime: TDateTime;
+  end;
+
+  TDirInfoArray = array of TDirInfo;
+
+procedure QuickSortDirs(var A: TDirInfoArray; L, R: Integer; Ascending: Boolean);
+var
+  I, J: Integer;
+  P, T: TDirInfo;
+begin
+  I := L;
+  J := R;
+  P := A[(L + R) div 2];
+
+  repeat
+    if Ascending then
+    begin
+      // Oldest -> Newest
+      while A[I].CreationTime < P.CreationTime do Inc(I);
+      while A[J].CreationTime > P.CreationTime do Dec(J);
+    end
+    else
+    begin
+      // Newest -> Oldest
+      while A[I].CreationTime > P.CreationTime do Inc(I);
+      while A[J].CreationTime < P.CreationTime do Dec(J);
+    end;
+
+    if I <= J then
+    begin
+      T := A[I];
+      A[I] := A[J];
+      A[J] := T;
+      Inc(I);
+      Dec(J);
+    end;
+  until I > J;
+
+  if L < J then QuickSortDirs(A, L, J, Ascending);
+  if I < R then QuickSortDirs(A, I, R, Ascending);
+end;
+
+procedure GetDirsByCreationTime(const dir: string; const Result: TStrings;
+  Ascending: Boolean = True);
+var
+  sr: TSearchRec;
+  Path, FullDir: string;
+  Info: TDirInfoArray;
+  Count, rc: Integer;
+  fad: WIN32_FILE_ATTRIBUTE_DATA;
+  ftLocal: TFileTime;
+  st: TSystemTime;
+  dt: TDateTime;
+  i: Integer;
+begin
+  if Result = nil then Exit;
+  Result.Clear;
+
+  Path := IncludeTrailingPathDelimiter(dir);
+
+  Count := 0;
+  SetLength(Info, 0);
+
+  rc := FindFirst(Path + '*.*', faDirectory, sr);
+  try
+    while rc = 0 do
+    begin
+      if ((sr.Attr and faDirectory) = faDirectory) and
+         (sr.Name <> '.') and (sr.Name <> '..') then
+      begin
+        FullDir := Path + sr.Name;
+
+        dt := 0;
+        if GetFileAttributesEx(PChar(FullDir), GetFileExInfoStandard, @fad) then
+          if FileTimeToLocalFileTime(fad.ftCreationTime, ftLocal) and
+             FileTimeToSystemTime(ftLocal, st) then
+            dt := SystemTimeToDateTime(st);
+
+        Inc(Count);
+        SetLength(Info, Count);
+        Info[Count - 1].Name := sr.Name;
+        Info[Count - 1].CreationTime := dt;
+      end;
+
+      rc := FindNext(sr);
+    end;
+  finally
+    FindClose(sr);
+  end;
+
+  if Count = 0 then Exit;
+
+  //Sort according to Ascending/Descending flag
+  QuickSortDirs(Info, 0, Count - 1, Ascending);
+
+  // Output names
+  for i := 0 to Count - 1 do
+    Result.Add(Info[i].Name);
+end;
+
+type
+  TFileInfo = record
+    Name: string;
+    CreationTime: TDateTime;
+  end;
+
+  TFileInfoArray = array of TFileInfo;
+
+procedure QuickSortFilesAsc(var A: TFileInfoArray; L, R: Integer);
+var
+  I, J: Integer;
+  P, T: TFileInfo;
+begin
+  I := L;
+  J := R;
+  P := A[(L + R) div 2];
+
+  repeat
+    while A[I].CreationTime < P.CreationTime do Inc(I);
+    while A[J].CreationTime > P.CreationTime do Dec(J);
+
+    if I <= J then
+    begin
+      T := A[I];
+      A[I] := A[J];
+      A[J] := T;
+      Inc(I);
+      Dec(J);
+    end;
+  until I > J;
+
+  if L < J then QuickSortFilesAsc(A, L, J);
+  if I < R then QuickSortFilesAsc(A, I, R);
+end;
+
+procedure GetFilesByCreationTimeAsc(const dir: string; const Result: TStrings;
+  const IncludeDir: Boolean = False; const IncludeExt: Boolean = True);
+var
+  rc: Integer;
+  tmpPath, ffound, fullName: string;
+  sr: TSearchRec;
+  FileData: TFileInfoArray;
+  Count: Integer;
+  fad: WIN32_FILE_ATTRIBUTE_DATA;
+  ftLocal: TFileTime;
+  st: TSystemTime;
+  dt: TDateTime;
+  i: Integer;
+begin
+  if Result = nil then Exit;
+
+  Result.Clear;
+  tmpPath := IncludeTrailingPathDelimiter(ExtractFilePath(dir));
+  Count := 0;
+  SetLength(FileData, 0);
+
+  rc := FindFirst(dir, faAnyFile, sr);
+  try
+    while rc = 0 do
+    begin
+      if (sr.Name <> '.') and (sr.Name <> '..') then
+      begin
+        ffound := sr.Name;
+        fullName := tmpPath + sr.Name;
+
+        dt := 0;
+        if GetFileAttributesEx(PChar(fullName), GetFileExInfoStandard, @fad) then
+          if FileTimeToLocalFileTime(fad.ftCreationTime, ftLocal) and
+             FileTimeToSystemTime(ftLocal, st) then
+            dt := SystemTimeToDateTime(st);
+
+        if not IncludeExt then
+          ffound := ChangeFileExt(ffound, '');
+
+        Inc(Count);
+        SetLength(FileData, Count);
+        FileData[Count - 1].Name := ffound;
+        FileData[Count - 1].CreationTime := dt;
+      end;
+
+      rc := FindNext(sr);
+    end;
+  finally
+    FindClose(sr);
+  end;
+
+  if Count = 0 then Exit;
+
+  QuickSortFilesAsc(FileData, 0, Count - 1);
+
+  for i := 0 to Count - 1 do
+    if IncludeDir then
+      Result.Add(tmpPath + FileData[i].Name)
+    else
+      Result.Add(FileData[i].Name);
+end;
+
+procedure QuickSortFilesDesc(var A: TFileInfoArray; L, R: Integer);
+var
+  I, J: Integer;
+  P, T: TFileInfo;
+begin
+  I := L;
+  J := R;
+  P := A[(L + R) div 2];
+
+  repeat
+    while A[I].CreationTime > P.CreationTime do Inc(I);
+    while A[J].CreationTime < P.CreationTime do Dec(J);
+
+    if I <= J then
+    begin
+      T := A[I];
+      A[I] := A[J];
+      A[J] := T;
+      Inc(I);
+      Dec(J);
+    end;
+  until I > J;
+
+  if L < J then QuickSortFilesDesc(A, L, J);
+  if I < R then QuickSortFilesDesc(A, I, R);
+end;
+
+procedure GetFilesByCreationTimeDesc(const dir: string; const Result: TStrings;
+  const IncludeDir: Boolean = False; const IncludeExt: Boolean = True);
+var
+  rc: Integer;
+  tmpPath, ffound, fullName: string;
+  sr: TSearchRec;
+  FileData: TFileInfoArray;
+  Count: Integer;
+  fad: WIN32_FILE_ATTRIBUTE_DATA;
+  ftLocal: TFileTime;
+  st: TSystemTime;
+  dt: TDateTime;
+  i: Integer;
+begin
+  if Result = nil then Exit;
+
+  Result.Clear;
+  tmpPath := IncludeTrailingPathDelimiter(ExtractFilePath(dir));
+  Count := 0;
+  SetLength(FileData, 0);
+
+  rc := FindFirst(dir, faAnyFile, sr);
+  try
+    while rc = 0 do
+    begin
+      if (sr.Name <> '.') and (sr.Name <> '..') then
+      begin
+        ffound := sr.Name;
+        fullName := tmpPath + sr.Name;
+
+        dt := 0;
+        if GetFileAttributesEx(PChar(fullName), GetFileExInfoStandard, @fad) then
+          if FileTimeToLocalFileTime(fad.ftCreationTime, ftLocal) and
+             FileTimeToSystemTime(ftLocal, st) then
+            dt := SystemTimeToDateTime(st);
+
+        if not IncludeExt then
+          ffound := ChangeFileExt(ffound, '');
+
+        Inc(Count);
+        SetLength(FileData, Count);
+        FileData[Count - 1].Name := ffound;
+        FileData[Count - 1].CreationTime := dt;
+      end;
+
+      rc := FindNext(sr);
+    end;
+  finally
+    FindClose(sr);
+  end;
+
+  if Count = 0 then Exit;
+
+  QuickSortFilesDesc(FileData, 0, Count - 1);
+
+  for i := 0 to Count - 1 do
+    if IncludeDir then
+      Result.Add(tmpPath + FileData[i].Name)
+    else
+      Result.Add(FileData[i].Name);
+end;
+
+procedure CollectFilesRecursive(const Buffer: TStrings; Dir, Mask: string);
+var
+  dirs: TStrings;
+  SR: TSearchRec;
+  f: Boolean;
+  i: Integer;
+begin
+  if Dir = '' then Exit;
+  if LastChar(Dir) <> PathDelim then
+    Dir := Dir + PathDelim;
+
+  // collect files in this dir
+  f := FindFirst(Dir + Mask, faAnyFile - faDirectory, SR) = 0;
+  try
+    while f do
+    begin
+      Buffer.Add(Dir + SR.Name);
+      f := FindNext(SR) = 0;
+    end;
+  finally
+    FindClose(SR);
+  end;
+
+  // collect subdirs
+  dirs := TStringList.Create;
+  try
+    f := FindFirst(Dir + '*.*', faAnyFile, SR) = 0;
+    while f do
+    begin
+      if ((SR.Attr and faDirectory) <> 0) and (SR.Name <> '.') and (SR.Name <> '..') then
+        dirs.Add(Dir + SR.Name);
+      f := FindNext(SR) = 0;
+    end;
+    FindClose(SR);
+
+    // recurse
+    for i := 0 to dirs.Count - 1 do
+      CollectFilesRecursive(Buffer, dirs[i], Mask);
+
+  finally
+    dirs.Free;
+  end;
+end;
+
+procedure QuickSortFiles(var A: TFileInfoArray; L, R: Integer; Ascending: Boolean);
+var
+  I, J: Integer;
+  P, T: TFileInfo;
+begin
+  I := L;
+  J := R;
+  P := A[(L + R) div 2];
+
+  repeat
+    if Ascending then
+    begin
+      // Oldest -> Newest
+      while A[I].CreationTime < P.CreationTime do Inc(I);
+      while A[J].CreationTime > P.CreationTime do Dec(J);
+    end
+    else
+    begin
+      // Newest -> Oldest
+      while A[I].CreationTime > P.CreationTime do Inc(I);
+      while A[J].CreationTime < P.CreationTime do Dec(J);
+    end;
+
+    if I <= J then
+    begin
+      T := A[I];
+      A[I] := A[J];
+      A[J] := T;
+      Inc(I);
+      Dec(J);
+    end;
+  until I > J;
+
+  if L < J then QuickSortFiles(A, L, J, Ascending);
+  if I < R then QuickSortFiles(A, I, R, Ascending);
+end;
+
+procedure GetFilesRecursiveByCreationTime(const Result: TStrings;
+  Dir, Mask: string; Ascending: Boolean = True);
+var
+  Buffer: TStringList;
+  FileData: TFileInfoArray;
+  fad: WIN32_FILE_ATTRIBUTE_DATA;
+  ftLocal: TFileTime;
+  st: TSystemTime;
+  dt: TDateTime;
+  i, Count: Integer;
+begin
+  if Result = nil then Exit;
+
+  // 1) Collect files unsorted
+  Buffer := TStringList.Create;
+  try
+    CollectFilesRecursive(Buffer, Dir, Mask);
+
+    Count := Buffer.Count;
+    if Count = 0 then Exit;
+
+    SetLength(FileData, Count);
+
+    // 2) Read creation timestamps
+    for i := 0 to Count - 1 do
+    begin
+      FileData[i].Name := Buffer[i];
+
+      dt := 0;
+      if GetFileAttributesEx(PChar(Buffer[i]), GetFileExInfoStandard, @fad) then
+        if FileTimeToLocalFileTime(fad.ftCreationTime, ftLocal) and
+           FileTimeToSystemTime(ftLocal, st) then
+          dt := SystemTimeToDateTime(st);
+
+      FileData[i].CreationTime := dt;
+    end;
+
+  finally
+    Buffer.Free;
+  end;
+
+  // 3) Sort the file list by creation time
+  QuickSortFiles(FileData, 0, Count - 1, Ascending);
+
+  // 4) Output sorted result
+  Result.Clear;
+  for i := 0 to Count - 1 do
+    Result.Add(FileData[i].Name);
+end;
+
+type
+  TFolderInfo = record
+    Name: string;
+    CreationTime: TDateTime;
+  end;
+
+function SortFoldersByCreationDate(const BasePath, FolderNames: string): string;
+var
+  InfoList: array of TFolderInfo;
+  SL: TStringList;
+  I: Integer;
+
+  function GetCreationTime(const Folder: string): TDateTime;
+  var
+    SR: TWin32FindData;
+    H: THandle;
+    FullPath: string;
+    LFT: TFileTime;
+    ST: TSystemTime;
+  begin
+    Result := 0;
+    FullPath := IncludeTrailingPathDelimiter(BasePath) + Folder;
+
+    H := FindFirstFile(PChar(FullPath), SR);
+    if H <> INVALID_HANDLE_VALUE then
+    try
+      if (SR.dwFileAttributes and FILE_ATTRIBUTE_DIRECTORY) <> 0 then
+        if FileTimeToLocalFileTime(SR.ftCreationTime, LFT) and
+           FileTimeToSystemTime(LFT, ST) then
+          Result := SystemTimeToDateTime(ST);
+    finally
+      {$IF CompilerVersion > 22}Winapi.{$IFEND}Windows.FindClose(H);
+    end;
+  end;
+
+  procedure QuickSort(L, R: Integer);
+  var
+    I, J: Integer;
+    Pivot: TDateTime;
+    Temp: TFolderInfo;
+  begin
+    I := L;
+    J := R;
+    Pivot := InfoList[(L + R) div 2].CreationTime;
+
+    repeat
+      // NEWEST first
+      while InfoList[I].CreationTime > Pivot do Inc(I);
+      while InfoList[J].CreationTime < Pivot do Dec(J);
+
+      if I <= J then
+      begin
+        Temp := InfoList[I];
+        InfoList[I] := InfoList[J];
+        InfoList[J] := Temp;
+        Inc(I);
+        Dec(J);
+      end;
+    until I > J;
+
+    if L < J then QuickSort(L, J);
+    if I < R then QuickSort(I, R);
+  end;
+
+begin
+  Result := '';
+
+  SL := TStringList.Create;
+  try
+    SL.Text := Trim(FolderNames);
+
+    if SL.Count = 0 then
+      Exit;
+
+    SetLength(InfoList, SL.Count);
+
+    // collect info
+    for I := 0 to SL.Count - 1 do
+    begin
+      InfoList[I].Name := SL[I];
+      InfoList[I].CreationTime := GetCreationTime(SL[I]);
+    end;
+
+    if Length(InfoList) > 1 then
+      QuickSort(0, High(InfoList));
+
+    // rebuild list in sorted order
+    SL.Clear;
+    for I := 0 to High(InfoList) do
+      SL.Add(InfoList[I].Name);
+
+    Result := SL.Text;
+  finally
+    SL.Free;
+  end;
 end;
 
 // ------------------------------------------------------------------------//

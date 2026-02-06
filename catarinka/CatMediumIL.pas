@@ -47,6 +47,7 @@ const
   SECURITY_MANDATORY_SYSTEM_RID = $00004000;
   SECURITY_MANDATORY_PROTECTED_PROCESS_RID = $00005000;
 
+
 function GetShellWindow: HWND; stdcall; external 'user32.dll' name 'GetShellWindow';
 
 // writes Integration Level of the process with the given ID into dwProcessIL

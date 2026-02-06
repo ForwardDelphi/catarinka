@@ -2,10 +2,10 @@ unit CatListEditor;
 {
  Catarinka TCatListEditor
  A fork of super.pas (TSuperList 1.7) with enhancements
- Copyright (c) 2003-2017 Felipe Daragon
+ Copyright (c) 2003-2025 Felipe Daragon
 
  License: 4-clause BSD, same license as the original code by Spanware Inc.
- 
+
  Original Author: David Koretzky
  Copyright (c) 1999 Spanware Inc.
 }
@@ -66,6 +66,7 @@ type
     FOnDeleteButtonClick: TNotifyEvent;
     FOnListBoxDoubleClick : TNotifyEvent;
     FOnListBoxKeyDown : TNotifyEvent;
+    FOnListBoxChanged : TNotifyEvent; // FD
 
     FAddString : string;
     FAddCaption : string;
@@ -137,10 +138,12 @@ type
     property ListBoxItems : TStrings read GetListBoxItems write SetListBoxItems;
     property MaxLength : Integer read FMaxLength write FMaxLength default 0;
     property MaxCount : Integer read FMaxCount write FMaxCount default 0;
+    // events
     property OnAddClick: TNotifyEvent read FOnAddButtonClick write FOnAddButtonClick;
     property OnDeleteClick: TNotifyEvent read FOnDeleteButtonClick write FOnDeleteButtonClick;
     property OnListBoxDoubleClick : TNotifyEvent read FOnListBoxDoubleClick write FOnListBoxDoubleClick;
     property OnListBoxKeyDown : TNotifyEvent read FOnListBoxKeyDown write FOnListBoxKeyDown;
+    property OnListBoxChanged: TNotifyEvent read FOnListBoxChanged write FOnListBoxChanged; // FD
     property UseDefaultKeyMaps : boolean read FUsekeyMaps write FUseKeyMaps default false;
   end;
 
@@ -554,6 +557,8 @@ begin
       begin
         FListBox.Items.Add(s);
         FListBoxChanged := true;
+        if Assigned(FOnListBoxChanged) then
+          FOnListBoxChanged(Self);
       end;
   if Assigned(FOnAddButtonClick) then FOnAddButtonClick(Self);
   EnableButtons;
@@ -565,6 +570,8 @@ begin
    begin
     FListBox.Items.Delete( FListBox.ItemIndex );
     FListBoxChanged := true;
+    if Assigned(FOnListBoxChanged) then
+      FOnListBoxChanged(Self);
    end;
    if Assigned(FOnDeleteButtonClick) then FOnDeleteButtonClick(Self);
    //EnableButtons;
@@ -590,6 +597,8 @@ begin
       begin
         FListBox.Items [FListBox.ItemIndex] := s;
         FListBoxChanged := true;
+        if Assigned(FOnListBoxChanged) then
+          FOnListBoxChanged(Self);
       end;
     if Assigned(FOnListBoxDoubleClick) then FOnListBoxDoubleClick(Self);
    end;
@@ -645,6 +654,8 @@ begin
   begin
     FListBox.Items.Delete(FListBox.ItemIndex);
     FListBoxChanged := true;
+    if Assigned(FOnListBoxChanged) then
+      FOnListBoxChanged(Self);
   end;
 end;
 

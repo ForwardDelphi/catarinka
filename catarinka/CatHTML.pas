@@ -1,7 +1,7 @@
 unit CatHTML;
 {
   Catarinka - HTML & URL related functions
-  Copyright (c) 2003-2023 Felipe Daragon
+  Copyright (c) 2003-2025 Felipe Daragon
   License: 3-clause BSD
   See https://github.com/felipedaragon/catarinka/ for details
 
@@ -215,7 +215,7 @@ function HtmlEntityEncode(const s: string): string;
 function HtmlEntityDecode(const s: string): string;
 function HtmlEscape(const s: string): string;
 function HtmlUnescape(const s: string): string;
-function StripHTML(const s: string): string;
+function StripHTML(const s: string;PreserveLinesNumber:boolean=false): string;
 function StripPHPCode(const s: string): string;
 
 // JSON functions
@@ -223,9 +223,10 @@ function JSONStringEscape(const s: string): string;
 
 // URL functions
 function CrackURL(const url: string): TURLParts;
-function ChangeURLPath(const url, newpath: string): string;
+function ChangeUrlPath(const url, newpath: string): string;
 function RemoveUrlPath(const url: string): string;
-function RemoveURLFilename(const URL:string;ExtensionRequired:boolean=false):string;
+function RemoveUrlFilename(const URL:string;ExtensionRequired:boolean=false):string;
+function RemoveUrlFileExt(const url: string; KeepParams: Boolean = False): string;
 function ExtractUrlFileExt(const url: string): string;
 function ExtractUrlFileName(const url: string): string;
 function ExtractUrlHost(const url: string): string;
@@ -354,10 +355,15 @@ begin
   if (Port <> 80) and (Port <> 443) then
     sport := ':' + inttostr(Port);
   result := proto + Host + sport;
+  if host = emptystr then
+    result := emptystr;
 end;
 
-function StripHTML(const s: string): string;
+function StripHTML(const s: string;PreserveLinesNumber:boolean=false): string;
 begin
+  if PreserveLinesNumber = true then
+  result := StripEnclosedPreserve(s,'<','>')
+  else
   result := StripEnclosed(s,'<', '>');
 end;
 
@@ -534,6 +540,41 @@ begin
     end;
   end;
   Result := Result+ Copy(s, p, i - 1);
+end;
+
+// Removes the extension part of an URL
+// RemoveUrlFileExt('http://site.com/image.png?x=1'); -> http://site.com/image
+// RemoveUrlFileExt('http://site.com/image.png?x=1', True); -> http://site.com/image?x=1
+// RemoveUrlFileExt('http://site.com/archive.zip'); -> http://site.com/archive
+// RemoveUrlFileExt('http://site.com/path/'); -> http://site.com/path/
+function RemoveUrlFileExt(const url: string; KeepParams: Boolean = False): string;
+var
+  BaseUrl, Ext, Params: string;
+  QPos: Integer;
+begin
+  // Find query string position
+  QPos := Pos('?', url);
+  if QPos > 0 then
+  begin
+    BaseUrl := Copy(url, 1, QPos - 1);
+    Params := Copy(url, QPos, MaxInt);
+  end
+  else
+  begin
+    BaseUrl := url;
+    Params := '';
+  end;
+
+  // Remove extension if present
+  Ext := ExtractFileExt(BaseUrl);
+  if Ext <> '' then
+    Delete(BaseUrl, Length(BaseUrl) - Length(Ext) + 1, Length(Ext));
+
+  // Reattach query string only if requested
+  if KeepParams then
+    Result := BaseUrl + Params
+  else
+    Result := BaseUrl;
 end;
 
 // Removes the filename part of a URL, example:

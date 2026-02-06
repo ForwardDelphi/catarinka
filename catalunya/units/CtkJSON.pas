@@ -35,10 +35,13 @@ uses pLua;
 function method_settext(L: PLua_State): Integer; cdecl;
 var
   o: TCatarinkaJSON;
+  json:string;
 begin
   o := TCatarinkaJSON(LuaToTLuaObject(L, 1));
-  if plua_validatemethodargs(L, result, [LUA_TSTRING]).OK then
-   o.obj.text := lua_tostring(L, 2);
+  if plua_validatemethodargs(L, result, [LUA_TSTRING]).OK then begin
+   json := lua_tostring(L, 2);
+   o.obj.text := json;
+  end;
 end;
 
 function method_loadfromfile(L: PLua_State): Integer; cdecl;

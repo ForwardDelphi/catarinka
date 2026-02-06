@@ -3,7 +3,7 @@
   Caches multiple string lists, allowing them to be loaded or saved together
   to an external JSON file
 
-  Copyright (c) 2003-2020 Felipe Daragon
+  Copyright (c) 2003-2025 Felipe Daragon
   License: 3-clause BSD
   See https://github.com/felipedaragon/catarinka/ for details
 }
@@ -43,7 +43,9 @@ type
 type
   TCachedStringList = class(TStringList)
   private
-    ID: string;
+    fID:string;
+  public
+    property ID: string read fID write fID;
   end;
 
 implementation
@@ -67,14 +69,19 @@ end;
 
 procedure TStringListCache.ClearLists;
 var
+  obj: TObject;
   csl: TCachedStringList;
   m, c: Integer;
 begin
   m := fCache.Count;
   for c := m - 1 downto 0 do
   begin
-    csl := fCache.ObjectAt(c) as TCachedStringList;
-    csl.Clear;
+    obj := fCache.ObjectAt(c);
+    if obj is TCachedStringList then
+    begin
+      csl := TCachedStringList(obj);
+      csl.Clear;
+    end;
   end;
 end;
 
@@ -119,42 +126,53 @@ end;
 procedure TStringListCache.SaveToFile(const AFilename: string);
 var
   j: TCatJSON;
+  obj: TObject;
   csl: TCachedStringList;
   m, c: Integer;
 begin
   j := TCatJSON.Create;
-  j.SetValue(cIDListKey, fNameList.Text);
-  m := fCache.Count;
-  for c := m - 1 downto 0 do
-  begin
-    csl := fCache.ObjectAt(c) as TCachedStringList;
-    j.SetValue(cCacheKeyPrefix + csl.ID, csl.Text);
+  try
+    j.SetValue(cIDListKey, fNameList.Text);
+    m := fCache.Count;
+    for c := m - 1 downto 0 do
+    begin
+      obj := fCache.ObjectAt(c);
+      if obj is TCachedStringList then
+      begin
+        csl := TCachedStringList(obj);
+        j.SetValue(cCacheKeyPrefix + csl.ID, csl.Text);
+      end;
+    end;
+    j.SaveToFile(AFilename);
+  finally
+    j.Free;
   end;
-  j.SaveToFile(AFilename);
-  j.Free;
 end;
 
 function TStringListCache.GetList(const AName: string): TStringList;
 var
+  obj: TObject;
   csl: TCachedStringList;
   m, c: Integer;
 begin
-  result := nil;
   m := fCache.Count;
   for c := m - 1 downto 0 do
   begin
-    csl := fCache.ObjectAt(c) as TCachedStringList;
-    if csl.ID = AName then
-      result := csl;
+    obj := fCache.ObjectAt(c);
+    if obj is TCachedStringList then
+    begin
+      csl := TCachedStringList(obj);
+      if csl.ID = AName then
+        Exit(csl);
+    end;
   end;
-  if result = nil then
-  begin
-    csl := TCachedStringList.Create;
-    csl.ID := AName;
-    fCache.Add(csl);
-    fNameList.Add(AName);
-    result := csl;
-  end;
+
+  // Not found -> create and register
+  csl := TCachedStringList.Create;
+  csl.ID := AName;
+  fCache.Add(csl);
+  fNameList.Add(AName);
+  Result := csl;
 end;
 
 constructor TStringListCache.Create(ACapacity: Integer = 1000;

@@ -2,7 +2,7 @@ library Catalunya;
 
 {
   Catalunya Lua Library
-  Copyright (c) 2013-2023 Felipe Daragon
+  Copyright (c) 2013-2025 Felipe Daragon
   License: 3-clause BSD
   See https://github.com/felipedaragon/catarinka/ for details
 }

@@ -96,10 +96,12 @@ function SendCromisMessage(desthandle, msgid: integer; l: string):boolean;
 var
   i: Integer;
 begin
+ result := false;
  for i := 1 to 10 do
   begin
     if SendCromisMessageTry(desthandle, msgid, l) = True then
     begin
+      result := true;
       // The function returned True, so break out of the loop
       Break;
     end;

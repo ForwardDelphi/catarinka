@@ -15,18 +15,36 @@ interface
 
 {$I Catarinka.inc}
 
+{$IFDEF LUA51}
+  {$DEFINE INCLUDELUA}
+{$ENDIF}
+{$IFDEF LUAJIT}
+  {$DEFINE INCLUDELUA}
+{$ENDIF}
+
 uses
+{$IFDEF INCLUDELUA}
+ plua, Lua,
+{$ENDIF}
 {$IFDEF DXE2_OR_UP}
   Winapi.Windows, System.Classes, System.SysUtils;
 {$ELSE}
   Windows, Classes, SysUtils;
 {$ENDIF}
 
+
+
+
 type
   TCatCSHelper = class
   private
+    fEnableColors:boolean;
     fLastLnLength: integer;
     fScreenHandle: THandle;
+    {$IFDEF INCLUDELUA}
+    fLuaState: plua_State;
+    {$ENDIF}
+    procedure WriteLn_LuaPrint(s: string);
   public
     function ReadLn:string;
     function ReadPassword(const InputMask: Char = '*'): string;
@@ -36,9 +54,15 @@ type
     procedure WriteLn_Cyan(s: string);
     procedure WriteLn_Green(s: string);
     procedure WriteLn_Red(s: string);
+    procedure WriteLn_Magenta(s: string);
     procedure WriteLn_White(s: string);
     constructor Create;
     destructor Destroy; override;
+  // properties
+    property EnableColors: boolean read fEnableColors write fEnableColors;
+    {$IFDEF INCLUDELUA}
+    property LuaState: plua_State read fLuaState write fLuaState;
+    {$ENDIF}
   end;
 
 procedure TextColor(Color: Byte);
@@ -177,24 +201,48 @@ begin
   TextColor(csclLIGHTGRAY); // default console color
 end;
 
+procedure TCatCSHelper.WriteLn_LuaPrint(s: string);
+begin
+{$IFDEF INCLUDELUA}
+  lua_getglobal(fLuaState, 'print');
+  lua_pushstring(fLuaState, s);
+  lua_call(fLuaState, 1, 0);
+{$ENDIF}
+end;
+
 procedure TCatCSHelper.WriteLn_Cyan(s: string);
 begin
-  WriteLnC(s, csclLIGHTCYAN);
+  if fEnableColors = true then
+  WriteLnC(s, csclLIGHTCYAN) else
+  WriteLn_LuaPrint(s);
+end;
+
+procedure TCatCSHelper.WriteLn_Magenta(s: string);
+begin
+  if fEnableColors = true then
+  WriteLnC(s, csclMAGENTA) else
+  WriteLn_LuaPrint(s);
 end;
 
 procedure TCatCSHelper.WriteLn_Green(s: string);
 begin
-  WriteLnC(s, csclLIGHTGREEN);
+  if fEnableColors = true then
+  WriteLnC(s, csclLIGHTGREEN) else
+  WriteLn_LuaPrint(s);
 end;
 
 procedure TCatCSHelper.WriteLn_Red(s: string);
 begin
-  WriteLnC(s, csclLIGHTRED);
+  if fEnableColors = true then
+  WriteLnC(s, csclLIGHTRED) else
+  WriteLn_LuaPrint(s);
 end;
 
 procedure TCatCSHelper.WriteLn_White(s: string);
 begin
-  WriteLnC(s, csclWHITE);
+  if fEnableColors = true then
+  WriteLnC(s, csclWHITE) else
+  WriteLn_LuaPrint(s);
 end;
 
 function TCatCSHelper.ReadLn:string;
@@ -209,12 +257,14 @@ end;
 
 procedure TCatCSHelper.WriteDot;
 begin
-  System.Write('.');
+  if fEnableColors = true then
+  System.Write('.') else
+  WriteLn_LuaPrint('.');
 end;
 
 constructor TCatCSHelper.Create;
 begin
-  //
+  fEnableColors := true;
 end;
 
 destructor TCatCSHelper.Destroy;

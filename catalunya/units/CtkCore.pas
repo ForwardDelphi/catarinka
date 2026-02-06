@@ -265,7 +265,7 @@ end;
 
 function get_urlfields(L: plua_State): integer; cdecl;
 const
-   url_table : array [1..12] of luaL_Reg =
+   url_table : array [1..13] of luaL_Reg =
    (
    (name:'changepath';func:url_changepath),
    (name:'combine';func:url_combine),
@@ -278,6 +278,7 @@ const
    (name:'getfileext';func:url_getfileext),
    (name:'getfilename';func:url_getfilename),
    (name:'gettiny';func:url_gettiny),
+   (name:'open';func:url_open),
    (name:nil;func:nil)
    );
 begin
@@ -320,8 +321,9 @@ end;
 
 function get_consolefields(L: plua_State): integer; cdecl;
 const
-   cs_table : array [1..6] of luaL_Reg =
+   cs_table : array [1..7] of luaL_Reg =
    (
+   (name:'printdisablecl';func:console_printdisablecolors),
    (name:'printgreen';func:console_printgreen),
    (name:'printred';func:console_printred),
    (name:'printwhite';func:console_printwhite),

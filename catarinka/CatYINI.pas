@@ -35,6 +35,7 @@ type
     procedure ReadSectionKeys(const Section:string; outsl:TStrings);
     procedure ReadSectionValues(const Section:string; outsl:TStrings);
     function ReadSectionValuesAsString(const Section:string):string;
+    function ReadBool(const Section,Key:string;const DefaultValue:boolean):boolean; virtual;
     function ReadString(const Section,Key:string;const DefaultValue:string=''):string; virtual;
     function ReadStringEx(const Section,Key:string;const DefaultValue:string=''):TCatFuncResult;
     procedure WriteString(const Section,Key,Value:string);
@@ -160,6 +161,16 @@ begin
   ReadSectionValues(Section, sl);
   result := sl.text;
   sl.Free;
+end;
+
+function TYIniList.ReadBool(const Section,Key:string;const DefaultValue:boolean):boolean;
+var
+  n:TYamlNode;
+begin
+  n := fDoc.Root.Values[section].Values[key];
+  if n.IsNil then
+    result := defaultvalue else
+    result := StrToBool(n);
 end;
 
 function TYIniList.ReadString(const Section,Key:string;const DefaultValue:string=''):string;

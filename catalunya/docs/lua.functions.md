@@ -103,6 +103,7 @@ These will return a boolean value.
 * **getfileext** ( url ): Returns the extension from an URL filename.
 * **getfilename** ( url ): Returns the URL filename.
 * **gettiny** ( url ): Returns a tiny version of an URL (uses tinyurl.com).
+* **open** ( url ): Opens an URL in the default browser.
 
 ### JSON Functions (json.*)
 

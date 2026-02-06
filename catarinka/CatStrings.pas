@@ -2,7 +2,7 @@ unit CatStrings;
 {
   Catarinka - String Operation functions
 
-  Copyright (c) 2003-2023 Felipe Daragon
+  Copyright (c) 2003-2025 Felipe Daragon
   License: 3-clause BSD
   See https://github.com/felipedaragon/catarinka/ for details
 
@@ -46,7 +46,11 @@ type
    B: boolean;
    I: int64;
    S: string;
- end;  
+   {$IFDEF DXE2_OR_UP}
+   procedure SetTrue(const reason:string='');
+   procedure SetFalse(const reason:string='');
+   {$ENDIF}
+ end;
 
 type
   TCatCaseLabel = record
@@ -86,6 +90,7 @@ function EndsWith(const s, prefix: string; IgnoreCase: Boolean = false)
 function EndsWith(const s: string; const prefixes: array of string;
   IgnoreCase: Boolean = false): Boolean; overload;
 function ExtractEnclosed(const s: string;const beginChar,endChar:char): string;
+function ExtractEnclosedSpecial(const s: string;const beginChar,beginChar2,endChar:char): string;
 function ExtractFromString(const s, startstr, endstr: string): string;
 function ExtractChars(const s:string;const aSet: TSysCharSet):string;
 function ExtractNumbers(const s: string): string;
@@ -112,6 +117,7 @@ function IsIntBetween(const i, i1, i2:int64):boolean;
 function IsLowercase(const s: string): Boolean;
 function IsUppercase(const s: string): Boolean;
 function IsRoman(const s: string): Boolean;
+function IsValidVersion(const S: string): Boolean;
 function LastChar(const s: string): Char;
 function LeftStr(s: string; c: longword): string;
 function MatchIntInArray(const i: integer; aArray: array of integer): Boolean;
@@ -145,11 +151,13 @@ function StrDecrease(const s: string; const step: integer = 1): string;
 function StrIncrease(const s: string; const step: integer = 1): string;
 function StripChars(const s: string; const aSet: TSysCharSet): string;
 function StripEnclosed(const s: string;const beginChar,endChar: Char): string;
+function StripEnclosedPreserve(const s: string; const beginChar, endChar: char): string;
 function StrMaxLen(const s: string; const MaxLen: integer;
   const AddEllipsis: Boolean = false): string;
 function StrToAlphaNum(const s: string): string;
 function StrArrayToCommaText(aArray: array of string):string;
 function StrArrayToText(aArray: array of string):string;
+function StrArrayToSeparatedStr(aArray: array of string;aSepStr:string=' '):string;
 function StrToBool(const s: string): Boolean;
 function StrToCharSet(const s: string): TSysCharSet;
 function StrToCommaText(const s: string): string;
@@ -160,6 +168,8 @@ function StrToNameValue(const s: string; const aSeparator:string='='): TCatNameV
 function StrToYN(const s:string):string;
 function SwapCase(const s: string): string;
 function TitleCase(const s: string): string;
+procedure WriteUtf8StringToStream(const S: string; Dest: TStream);
+function ReadUtf8StringFromStream(Src: TStream): string;
 
 {$IFDEF MSWINDOWS}
 // TODO: not compatible for crosscompilation
@@ -173,6 +183,7 @@ procedure SplitString(const s: string; separator: Char;
 {$IFDEF CHARINSET_UNAVAILABLE}
 function CharInSet(c: Char; CharSet: TSysCharSet): Boolean;
 {$ENDIF}
+
 
 // string list related functions
 function CompareStrings(sl: TStringList; Index1, Index2: integer): integer;
@@ -229,6 +240,8 @@ function CatCaseOf(const s: string; labels: array of string;
 function CatCaseLabelOf(const s: string; labels: array of TCatCaseLabel;
   const casesensitive: Boolean = true): integer; 
 function CatCaseLabelOf_GetName(const id: integer; labels: array of TCatCaseLabel): string;
+function CatCaseLabelOf_EndsWith(const s: string; labels: array of TCatCaseLabel;
+  const casesensitive: Boolean = true): integer; 
 
 const
   CRLF = #13 + #10;
@@ -249,6 +262,48 @@ begin
     result := false;
 end;
 {$ENDIF}
+
+{$IFDEF DXE2_OR_UP}
+procedure TCatFuncResult.SetTrue(const reason:string='');
+begin
+  self.B := true;
+  self.S := reason;
+end;
+
+procedure TCatFuncResult.SetFalse(const reason:string='');
+begin
+  self.B := false;
+  self.S := reason;
+end;
+{$ENDIF}
+
+procedure WriteUtf8StringToStream(const S: string; Dest: TStream);
+var
+  L: Integer;
+  Bytes: TBytes;
+begin
+  Bytes := TEncoding.UTF8.GetBytes(S);
+  L := Length(Bytes);
+  Dest.WriteBuffer(L, SizeOf(L));
+  if L > 0 then
+    Dest.WriteBuffer(Bytes[0], L);
+end;
+
+function ReadUtf8StringFromStream(Src: TStream): string;
+var
+  L: Integer;
+  Bytes: TBytes;
+begin
+  Result := '';
+  if Src.Read(L, SizeOf(L)) <> SizeOf(L) then
+    Exit;
+  if L <= 0 then
+    Exit;
+  SetLength(Bytes, L);
+  if Src.Read(Bytes[0], L) <> L then
+    Exit;
+  Result := TEncoding.UTF8.GetString(Bytes);
+end;
 
 function After(const s, substr: string): string;
 var
@@ -456,6 +511,28 @@ begin
   for i := low(labels) to high(labels) do
   begin
     if astr = labels[i].name then
+      result := labels[i].id;
+    if result <> -1 then
+      break;
+  end;
+end;
+
+function CatCaseLabelOf_EndsWith(const s: string; labels: array of TCatCaseLabel;
+  const casesensitive: Boolean = true): integer; overload;
+var
+  i: integer;
+  astr: string;
+begin
+  result := -1; // label not found
+  astr := s;
+  if casesensitive = false then begin
+    astr := lowercase(astr);
+    for i := low(labels) to high(labels) do
+      labels[i].name := lowercase(labels[i].name);
+  end;
+  for i := low(labels) to high(labels) do
+  begin
+    if endswith(astr,labels[i].name) then
       result := labels[i].id;
     if result <> -1 then
       break;
@@ -780,13 +857,9 @@ end;
 
 function IsInteger(const s: string): Boolean;
 var
-  v, c: integer;
+  v: int64;
 begin
-  Val(s, v, c);
-  if v = 0 then
-  begin // avoid compiler warning
-  end;
-  result := c = 0;
+  Result := TryStrToInt64(s, v);
 end;
 
 function IsIntBetween(const i, i1, i2:int64):boolean;
@@ -843,6 +916,26 @@ begin
       Exit;
     end;
   end;
+end;
+
+// Check if a String is a Version Number
+function IsValidVersion(const S: string): Boolean;
+var
+  Parts: TArray<string>;
+  I, Num: Integer;
+begin
+  Result := False;
+  Parts := S.Split(['.']);
+  if Length(Parts) = 0 then
+    Exit;
+  for I := 0 to High(Parts) do
+  begin
+    if not TryStrToInt(Parts[I], Num) then
+      Exit;
+    if Num < 0 then
+      Exit;
+  end;
+  Result := True;
 end;
 
 function LastChar(const s: string): Char;
@@ -1041,10 +1134,11 @@ end;
 
 function RepeatString(const s: string; count: cardinal): string;
 var
-  i: integer;
+  i: Integer;
 begin
+  Result := ''; // <-- important initialization
   for i := 1 to count do
-    result := result + s;
+    Result := Result + s;
 end;
 
 function ReplaceStr(const s, substr, repstr: string): string;
@@ -1239,6 +1333,15 @@ begin
   sl.Free;
 end;
 
+function StrArrayToSeparatedStr(aArray: array of string;aSepStr:string=' '):string;
+var
+  b: integer;
+begin
+  result := emptystr;
+  for b := Low(aArray) to High(aArray) do
+    result := result+aSepStr+aArray[b];
+end;
+
 function StrToBool(const s: string): Boolean;
 begin
   if MatchStrInArray(Trim(lowercase(s)), ['true', '1', 'yes', 't', 'y', 'on']) then
@@ -1331,6 +1434,42 @@ begin
     inc(i, 4);
   end;
 end;
+
+// Strips all text enclosed between beginChar and endChar, preserving the number of lines
+function StripEnclosedPreserve(const s: string; const beginChar, endChar: char): string;
+var
+  i: integer;
+  strip: boolean;
+  resultBuilder: TStringBuilder;
+begin
+  resultBuilder := TStringBuilder.Create;
+  try
+    strip := false;
+    for i := 1 to length(s) do
+    begin
+      if s[i] = beginChar then
+        strip := true;
+
+      if strip then
+      begin
+        if s[i] = endChar then
+        begin
+          strip := false;
+          Continue;
+        end;
+        // Preserve newlines during stripping
+        if s[i] = #10 then
+          resultBuilder.Append(s[i]); // Append newline character
+      end
+      else
+        resultBuilder.Append(s[i]);
+    end;
+    Result := resultBuilder.ToString;
+  finally
+    resultBuilder.Free;
+  end;
+end;
+
 
 function StripEnclosed(const s: string;const beginChar,endChar:char): string;
 var
@@ -1498,6 +1637,38 @@ begin
   for i := 1 to length(s) do
   begin
     if s[i] = beginChar then
+      extract := true;
+    if extract then
+    begin
+      if s[i] = endChar then
+      begin
+        extract := false;
+        Delete(exstr, 1, 1);
+        sl.Add(exstr);
+        exstr := emptystr;
+        Continue;
+      end else
+      exstr := exstr + s[i];
+    end;
+  end;
+  result := sl.Text;
+  sl.Free;
+end;
+
+// ExtractEnclosedSpecial('somestring {$name} another','{','$','}') will extract: name
+function ExtractEnclosedSpecial(const s: string;const beginChar,beginChar2,endChar:char): string;
+var
+  i: integer;
+  extract: boolean;
+  sl:TStringList;
+  exstr:string;
+begin
+  exstr := emptystr;
+  extract := false;
+  sl := TStringList.Create;
+  for i := 1 to length(s) do
+  begin
+    if (s[i] = beginChar2) and (i-1 >= 1) and (s[i-1] = beginChar) then
       extract := true;
     if extract then
     begin

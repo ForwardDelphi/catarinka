@@ -2,7 +2,7 @@ unit CatBase64;
 {
   Catarinka - Base64 encode/decode functions
 
-  Copyright (c) 2003-2017 Felipe Daragon
+  Copyright (c) 2003-2025 Felipe Daragon
   License: 3-clause BSD
   See https://github.com/felipedaragon/catarinka/ for details
 
@@ -23,9 +23,12 @@ uses
   Classes, SysUtils, NetEncoding;
 {$ENDIF}
 
+function IsBase64String(const S: string): Boolean;
 function Base64Encode(const s: string): string;
 function Base64Decode(const s: string): string;
+function ContainsValidBase64Symbols(const S: string): Boolean;
 function FileToB64(const filename:string):string;
+procedure B64ToFile(const Base64, outfilename:string);
 function FileToDataURL(const filename:string; mimetype:string=''):string;
 procedure MemoryStreamToBase64(const Stream: TMemoryStream; var Base64: string);
 procedure Base64ToMemoryStream(const Base64: string; var Stream: TMemoryStream);
@@ -34,6 +37,122 @@ implementation
 
 uses
   CatStrings, CatFiles;
+
+function RemoveWhitespace(const S: string): string;
+var
+  i, p: Integer;
+  ch: Char;
+begin
+  SetLength(Result, Length(S));
+  p := 0;
+  for i := 1 to Length(S) do
+  begin
+    ch := S[i];
+    if not (ch in [#9, #10, #13, ' ']) then
+    begin
+      Inc(p);
+      Result[p] := ch;
+    end;
+  end;
+  SetLength(Result, p);
+end;
+
+function NormalizeBase64ForDecode(const S: string; out Normalized: string): Boolean;
+var
+  i, len, eqPos, eqCount: Integer;
+  ch: Char;
+  hasPlusSlash, hasUrlSafe: Boolean;
+begin
+  Result := False;
+
+  Normalized := RemoveWhitespace(S);
+  if Normalized = '' then
+    Exit(False);
+
+  // Detect mixed alphabets
+  hasPlusSlash := (Pos('+', Normalized) > 0) or (Pos('/', Normalized) > 0);
+  hasUrlSafe   := (Pos('-', Normalized) > 0) or (Pos('_', Normalized) > 0);
+  if hasPlusSlash and hasUrlSafe then
+    Exit(False);
+
+  // Translate URL-safe to standard
+  if hasUrlSafe then
+  begin
+    Normalized := StringReplace(Normalized, '-', '+', [rfReplaceAll]);
+    Normalized := StringReplace(Normalized, '_', '/', [rfReplaceAll]);
+  end;
+
+  // Validate charset
+  for i := 1 to Length(Normalized) do
+  begin
+    ch := Normalized[i];
+    if not (ch in ['A'..'Z','a'..'z','0'..'9','+','/','=']) then
+      Exit(False);
+  end;
+
+  // '=' padding must be only at the end, 1 or 2 max
+  eqPos := Pos('=', Normalized);
+  if eqPos > 0 then
+  begin
+    eqCount := Length(Normalized) - eqPos + 1;
+    if (eqCount > 2) then
+      Exit(False);
+    for i := eqPos to Length(Normalized) do
+      if Normalized[i] <> '=' then
+        Exit(False);
+  end;
+
+  // Ensure length is multiple of 4 (pad if needed; remainder 1 is invalid)
+  len := Length(Normalized);
+  case (len mod 4) of
+    0: ; // ok
+    2: Normalized := Normalized + '==';
+    3: Normalized := Normalized + '=';
+    1: Exit(False);
+  end;
+
+  Result := True;
+end;
+
+function IsBase64String(const S: string): Boolean;
+var
+  N: string;
+begin
+  Result := False;
+  if not NormalizeBase64ForDecode(S, N) then
+    Exit;
+  try
+    // If decoding succeeds, it's valid Base64
+    TNetEncoding.Base64.DecodeStringToBytes(N);
+    Result := True;
+  except
+    Result := False;
+  end;
+end;
+
+function ContainsValidBase64Symbols(const S: string): Boolean;
+var
+  I: Integer;
+  C: Char;
+begin
+  Result := False;
+
+  // Base64 strings should not be empty
+  if S = '' then
+    Exit;
+
+  for I := 1 to Length(S) do
+  begin
+    C := S[I];
+
+    // Check if the character is valid in Base64 encoding
+    if not (C in ['A'..'Z', 'a'..'z', '0'..'9', '+', '/', '=']) then
+      Exit(False);
+  end;
+
+  Result := True;
+end;
+
 
 function FileToDataURL(const filename:string; mimetype:string=''):string;
 var
@@ -58,6 +177,16 @@ begin
   ms.LoadFromFile(filename);
   ms.Position := 0;
   MemoryStreamToBase64(ms, result);
+  ms.Free;
+end;
+
+procedure B64ToFile(const Base64, outfilename:string);
+var
+  ms: TMemoryStream;
+begin
+  ms := TMemoryStream.Create;
+  Base64ToMemoryStream(Base64, ms);
+  ms.SaveToFile(outfilename);
   ms.Free;
 end;
 
